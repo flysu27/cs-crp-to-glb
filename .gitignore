@@ -1,0 +1,28 @@
+# 本地虚拟环境（85 MB，不入库）
+venv/
+.venv/
+env/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 调试/验证产物（渲染图、临时脚本、中间 dump）
+_debug/
+_dbg/
+
+# 转换输出（含游戏资产衍生内容，不宜公开分发）
+out/
+
+# 样例 CRP（可由 python make_test_crp.py 重新生成）
+samples/*.crp
+
+# 本地 Agent 记忆/配置
+.workbuddy/
+
+# 编辑器/系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

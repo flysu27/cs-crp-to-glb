@@ -1,0 +1,6 @@
+numpy>=1.24
+Pillow>=9.5
+# 可选：BC1/BC2/BC3/BC4/BC5/BC7 贴图兜底解码（Pillow 解不了时使用）
+texture2ddecoder>=1.0.6
+# 可选：直接读取 UnityFS AssetBundle
+UnityPy>=1.10

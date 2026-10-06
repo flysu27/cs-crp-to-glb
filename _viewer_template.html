@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CRP → GLB 转换预览器 · crp2glb</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f2f4f8; color: #1f2430; height: 100vh; display: flex; flex-direction: column; }
+  header { background: #fff; border-bottom: 1px solid #e3e7ef; padding: 12px 18px;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  header h1 { font-size: 15px; font-weight: 700; }
+  header .tag { font-size: 12px; color: #68718a; }
+  header .spacer { flex: 1; }
+  button, label.btn { font-size: 13px; padding: 6px 12px; border-radius: 8px; border: 1px solid #d6dbe6;
+    background: #fff; color: #1f2430; cursor: pointer; }
+  button:hover, label.btn:hover { border-color: #4f6ef7; color: #4f6ef7; }
+  button:disabled, label.btn.disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: #4f6ef7; border-color: #4f6ef7; color: #fff; }
+  button.primary:hover { background: #3d5bf0; color: #fff; }
+  #stats { font-size: 12px; color: #68718a; line-height: 1.6; }
+  #engine { font-size: 12px; display: inline-flex; align-items: center; gap: 5px; color: #68718a; }
+  #engine .dot { width: 8px; height: 8px; border-radius: 50%; background: #c3c9d8; }
+  #engine.loading .dot { background: #f0a63c; animation: pulse 1s infinite; }
+  #engine.ready .dot { background: #35b56a; }
+  #engine.error .dot { background: #e05a4e; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  main { flex: 1; position: relative; }
+  #view { width: 100%; height: 100%; display: block; background: #1b1f27; }
+  #drop { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 10px; color: #cfd6e6; background: rgba(27,31,39,.92);
+    text-align: center; padding: 24px; }
+  #drop.hide { display: none; }
+  #drop b { color: #8ba4ff; }
+  #drop .big { font-size: 40px; }
+  #drop small { color: #8b93a8; line-height: 1.8; }
+  #busy { position: absolute; left: 50%; top: 18px; transform: translateX(-50%);
+    background: rgba(27,31,39,.92); color: #dfe6f5; font-size: 13px; padding: 10px 18px;
+    border-radius: 10px; display: none; align-items: center; gap: 10px; z-index: 5;
+    box-shadow: 0 4px 18px rgba(0,0,0,.35); }
+  #busy.show { display: inline-flex; }
+  #busy .spin { width: 14px; height: 14px; border: 2px solid #5a6478; border-top-color: #8ba4ff;
+    border-radius: 50%; animation: rot .8s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  #err { position: absolute; left: 14px; bottom: 14px; right: 14px; font-size: 12px; color: #ffb4a8;
+    background: rgba(0,0,0,.5); padding: 8px 12px; border-radius: 8px; display: none;
+    white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CRP → GLB 转换预览器</h1>
+  <span class="tag">城市天际线 .crp 拖入即转（浏览器内完成，不上传文件）</span>
+  <span id="engine"><span class="dot"></span><span id="engine-txt">引擎未加载</span></span>
+  <span class="spacer"></span>
+  <span id="stats"></span>
+  <button id="save" class="primary" disabled>下载 GLB</button>
+  <label class="btn">选择 .crp / .glb<input type="file" id="file" accept=".crp,.glb,.gltf" style="display:none"></label>
+  <button id="wire">线框</button>
+  <button id="grid">网格</button>
+  <button id="reset">重置视角</button>
+</header>
+<main>
+  <canvas id="view"></canvas>
+  <div id="drop">
+    <div class="big">🚌</div>
+    <div>拖入 <b>.crp</b> 自动转换并预览，或拖入 <b>.glb</b> 直接预览</div>
+    <small>转换在你的浏览器内完成（Pyodide + numpy + Pillow），模型贴图不会上传到任何服务器<br>
+    转换引擎首次使用需加载约 15~20 MB，之后浏览器会缓存</small>
+  </div>
+  <div id="busy"><span class="spin"></span><span id="busy-txt">处理中…</span></div>
+  <div id="err"></div>
+</main>
+
+<!-- crp2glb.py 源码占位：build_viewer.py 会把主程序源码注入这里，
+     使页面无需 fetch 即可（file:// 直接打开也能）在浏览器内转换。
+     修改 crp2glb.py 后运行：python build_viewer.py -->
+<script type="text/plain" id="crp2glb-src">__CRP2GLB_SOURCE__</script>
+
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const canvas = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1b1f27);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 5000);
+camera.position.set(14, 12, 18);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x404860, 1.1));
+const dir = new THREE.DirectionalLight(0xffffff, 1.6);
+dir.position.set(12, 20, 10);
+scene.add(dir);
+const dir2 = new THREE.DirectionalLight(0xffffff, 0.5);
+dir2.position.set(-14, 8, -12);
+scene.add(dir2);
+
+const grid = new THREE.GridHelper(60, 60, 0x3a4152, 0x2a2f3b);
+scene.add(grid);
+
+let model = null, wire = false, lastGlb = null, lastGlbName = 'asset.glb';
+const stats = document.createElement('span');
+document.querySelector('header').insertBefore(stats, document.querySelector('#engine'));
+const saveBtn = document.getElementById('save');
+
+/* ------------------------------- 引擎状态 ------------------------------- */
+const engineEl = document.getElementById('engine');
+const engineTxt = document.getElementById('engine-txt');
+const busyEl = document.getElementById('busy');
+const busyTxt = document.getElementById('busy-txt');
+
+function setEngine(state, text) {
+  engineEl.className = state;
+  engineTxt.textContent = text;
+}
+function busy(text) { busyTxt.textContent = text; busyEl.classList.add('show'); }
+function idle() { busyEl.classList.remove('show'); }
+function showErr(msg) {
+  const el = document.getElementById('err');
+  el.style.display = 'block';
+  el.textContent = msg;
+}
+
+/* ------------------------------ Pyodide 引擎 ----------------------------- */
+let pyodide = null, convertFn = null;
+
+async function ensureEngine() {
+  if (convertFn) return;
+  if (typeof loadPyodide === 'undefined')
+    throw new Error('Pyodide 加载失败：请检查网络（页面依赖 CDN）');
+  setEngine('loading', '引擎加载中…');
+  busy('正在加载 Python 转换引擎（首次约 15~20 MB，请稍候）…');
+  pyodide = await loadPyodide({ indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/' });
+  busy('正在加载 numpy / Pillow …');
+  try { await pyodide.loadPackage(['numpy', 'Pillow']); }
+  catch (e) { await pyodide.loadPackage(['numpy', 'pillow']); }
+  const src = document.getElementById('crp2glb-src').textContent;
+  pyodide.FS.writeFile('/crp2glb.py', src);
+  busy('初始化转换器…');
+  await pyodide.runPythonAsync(`
+import sys, json
+sys.path.insert(0, "/")
+import crp2glb
+
+class _Opts:
+    lod = None
+    no_tex = False
+    no_convert_hand = False
+    flip_uv = False
+
+def _convert(in_path, out_path):
+    data = open(in_path, "rb").read()
+    blob, rep = crp2glb.convert_crp_bytes(data, _Opts, None, in_path)
+    with open(out_path, "wb") as f:
+        f.write(blob)
+    slim = {"name": rep.get("name"), "stats": rep.get("stats"),
+            "warnings": rep.get("warnings", []),
+            "sections": [s for s in rep.get("sections", []) if "error" in s]}
+    return json.dumps(slim, ensure_ascii=False, default=str)
+`);
+  convertFn = pyodide.globals.get('_convert');
+  setEngine('ready', '引擎就绪');
+}
+
+async function convertCRP(file) {
+  await ensureEngine();
+  busy('正在转换 ' + file.name + ' …');
+  const buf = new Uint8Array(await file.arrayBuffer());
+  pyodide.FS.writeFile('/input.crp', buf);
+  let report;
+  try {
+    report = JSON.parse(convertFn('/input.crp', '/output.glb'));
+  } catch (e) {
+    idle();
+    const msg = (e && e.message) ? e.message : String(e);
+    showErr('CRP 转换失败：' + msg);
+    return;
+  }
+  const glb = pyodide.FS.readFile('/output.glb');
+  lastGlb = glb.slice().buffer;
+  lastGlbName = (report.name || file.name.replace(/\.crp$/i, '')) + '.glb';
+  saveBtn.disabled = false;
+  const st = report.stats || {};
+  let extra = '网格 ' + (st.meshes ?? '?') + ' · 贴图 ' + (st.textures ?? '?')
+    + ' · 三角面 ' + (st.triangles ?? '?');
+  if (report.warnings && report.warnings.length)
+    extra += '<br>⚠ ' + report.warnings.join('<br>⚠ ');
+  idle();
+  load(glb.buffer, file.name, extra);
+}
+
+/* ------------------------------ three.js 渲染 ---------------------------- */
+function fit(obj) {
+  const box = new THREE.Box3().setFromObject(obj);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const max = Math.max(size.x, size.y, size.z) || 1;
+  camera.position.set(center.x + max * 1.3, center.y + max * 0.9, center.z + max * 1.6);
+  camera.near = max / 500; camera.far = max * 200; camera.updateProjectionMatrix();
+  controls.target.copy(center);
+  controls.update();
+  let tris = 0, meshes = 0, textured = 0, verts = 0;
+  obj.traverse(o => {
+    if (o.isMesh) {
+      meshes++;
+      verts += o.geometry.attributes.position.count;
+      const g = o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count;
+      tris += g / 3;
+      if (o.material && o.material.map) textured++;
+    }
+  });
+  stats.innerHTML = `尺寸 ${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)} m<br>
+    网格 ${meshes} · 顶点 ${verts} · 三角面 ${Math.round(tris)} · 带贴图材质 ${textured}`;
+}
+
+function load(data, name, extra) {
+  document.getElementById('drop').classList.add('hide');
+  document.getElementById('err').style.display = 'none';
+  new GLTFLoader().parse(data, '', gltf => {
+    if (model) { scene.remove(model); }
+    model = gltf.scene;
+    model.traverse(o => {
+      if (o.isMesh && o.material) { o.material.side = THREE.DoubleSide; }
+    });
+    scene.add(model);
+    fit(model);
+    if (extra) stats.innerHTML = extra + '<br>' + stats.innerHTML;
+    console.log('已加载', name, gltf);
+  }, e => showErr('GLB 解析失败：' + (e.message || e)));
+}
+
+function handleFile(f) {
+  if (!f) return;
+  const name = f.name.toLowerCase();
+  if (name.endsWith('.crp')) {
+    convertCRP(f).catch(e => { idle(); showErr('转换失败：' + (e.message || e)); });
+  } else if (name.endsWith('.glb') || name.endsWith('.gltf')) {
+    const fr = new FileReader();
+    fr.onload = () => load(fr.result, f.name);
+    fr.readAsArrayBuffer(f);
+  } else {
+    showErr('不支持的文件类型：' + f.name + '（请拖入 .crp 或 .glb）');
+  }
+}
+
+document.getElementById('file').addEventListener('change', e => {
+  handleFile(e.target.files[0]); e.target.value = '';
+});
+
+['dragenter', 'dragover'].forEach(ev => document.body.addEventListener(ev, e => {
+  e.preventDefault();
+  document.getElementById('drop').classList.remove('hide');
+}));
+document.body.addEventListener('drop', e => {
+  e.preventDefault();
+  handleFile(e.dataTransfer.files[0]);
+});
+document.body.addEventListener('dragleave', e => {
+  if (e.relatedTarget === null) document.getElementById('drop').classList.add('hide');
+});
+
+/* --------------------------------- 工具栏 -------------------------------- */
+document.getElementById('wire').addEventListener('click', () => {
+  wire = !wire;
+  if (model) model.traverse(o => { if (o.isMesh && o.material) o.material.wireframe = wire; });
+});
+document.getElementById('grid').addEventListener('click', () => { grid.visible = !grid.visible; });
+document.getElementById('reset').addEventListener('click', () => { if (model) fit(model); });
+
+saveBtn.addEventListener('click', () => {
+  if (!lastGlb) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([lastGlb], { type: 'model/gltf-binary' }));
+  a.download = lastGlbName;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+});
+
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w || canvas.height !== h) {
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+}
+(function loop() {
+  requestAnimationFrame(loop);
+  resize();
+  controls.update();
+  renderer.render(scene, camera);
+})();
+
+/* 预加载引擎（后台静默进行，拖入时即已就绪） */
+ensureEngine().catch(e => setEngine('error', '引擎加载失败'));
+
+// 自动尝试加载转换产物（仅 http 服务下有效）
+fetch('./out/test_building.glb').then(r => {
+  if (!r.ok) throw 0;
+  return r.arrayBuffer();
+}).then(buf => load(buf, 'out/test_building.glb'))
+  .catch(() => { /* file:// 下无法 fetch，手动拖入即可 */ });
+</script>
+</body>
+</html>
